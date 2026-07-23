@@ -3,16 +3,17 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 
 [RequireComponent(typeof(Rigidbody2D))]
+[RequireComponent(typeof(BoxCollider2D))]
 public class PlayerController : MonoBehaviour
 {
     [Header("Movement")]
-    [Tooltip("Acceleration while grounded. Higher values feel snappier.")]
+    [Tooltip("Acceleration while grounded.")]
     [SerializeField] private float groundAcceleration = 120f;
 
     [Tooltip("Acceleration while airborne.")]
     [SerializeField] private float airAcceleration = 80f;
 
-    [Tooltip("Deceleration while grounded. High values mimic Hollow Knight's instant stop.")]
+    [Tooltip("Deceleration while grounded.")]
     [SerializeField] private float groundDeceleration = 140f;
 
     [Tooltip("Deceleration while airborne.")]
@@ -25,7 +26,7 @@ public class PlayerController : MonoBehaviour
     [Tooltip("Impulse applied on a jump.")]
     [SerializeField] private float jumpForce = 16.5f;
 
-    [Tooltip("Multiplier applied to upward linearVelocity when jump is released early.")]
+    [Tooltip("Multiplier applied to upward velocity when jump is released early.")]
     [SerializeField] private float jumpCutMultiplier = 0.5f;
 
     [Tooltip("How long the player can still jump after leaving the ground.")]
@@ -37,11 +38,21 @@ public class PlayerController : MonoBehaviour
     [Tooltip("How long dash input is remembered before landing or becoming available.")]
     [SerializeField] private float dashBufferTime = 0.1f;
 
+    [Header("Corner Correction (Box Precision)")]
+    [Tooltip("Enable ceiling corner correction to smooth out head-clips on box corners.")]
+    [SerializeField] private bool enableCornerCorrection = true;
+
+    [Tooltip("How far upward to check for corner overhangs.")]
+    [SerializeField] private float cornerCheckDistance = 0.25f;
+
+    [Tooltip("How many units to nudge the player horizontally when clipping a ceiling corner.")]
+    [SerializeField] private float cornerNudgeAmount = 0.12f;
+
     [Header("Gravity")]
     [Tooltip("Gravity while rising.")]
     [SerializeField] private float riseGravity = 40f;
 
-    [Tooltip("Gravity while falling. Hollow Knight features heavy, rapid falls.")]
+    [Tooltip("Gravity while falling.")]
     [SerializeField] private float fallGravity = 65f;
 
     [Tooltip("Lower gravity near the jump apex to make motion feel smoother.")]
@@ -50,8 +61,8 @@ public class PlayerController : MonoBehaviour
     [Tooltip("Maximum downward speed.")]
     [SerializeField] private float maxFallSpeed = 28f;
 
-    [Header("Wall")]
-    [Tooltip("Wall slide speed when sliding down a wall.")]
+    [Header("Wall & Wall Jump")]
+    [Tooltip("Wall slide speed when sliding down a wall without climbing.")]
     [SerializeField] private float wallSlideSpeed = 4f;
 
     [Tooltip("Horizontal force applied when wall jumping.")]
@@ -63,20 +74,74 @@ public class PlayerController : MonoBehaviour
     [Tooltip("How long the player is locked out from wall jumping control.")]
     [SerializeField] private float wallJumpLockTime = 0.15f;
 
-    [Header("Dash")]
-    [Tooltip("Dash speed. 24-26 provides a highly accurate, crisp response.")]
-    [SerializeField] private float dashSpeed = 24f;
+    [Header("Wall Climbing & Stamina")]
+    [Tooltip("Maximum stamina pool available for climbing.")]
+    [SerializeField] private float maxStamina = 100f;
 
-    [Tooltip("Speed when executing a downward plunge dash.")]
-    [SerializeField] private float downwardDashSpeed = 32f;
+    [Tooltip("Speed when climbing upward on a wall.")]
+    [SerializeField] private float climbUpSpeed = 4.5f;
+
+    [Tooltip("Speed when climbing downward on a wall.")]
+    [SerializeField] private float climbDownSpeed = 6.5f;
+
+    [Tooltip("Stamina drained per second while clinging still on a wall.")]
+    [SerializeField] private float climbStaminaDrain = 18f;
+
+    [Tooltip("Stamina drained per second while actively climbing upward.")]
+    [SerializeField] private float climbUpStaminaDrain = 55f;
+
+    [Tooltip("Stamina drained per second while climbing downward.")]
+    [SerializeField] private float climbDownStaminaDrain = 8f;
+
+    [Tooltip("Stamina deducted when performing a wall jump.")]
+    [SerializeField] private float wallJumpStaminaCost = 32f;
+
+    [Tooltip("When exhausted (0 stamina), allow a weak horizontal push wall jump with no upward force?")]
+    [SerializeField] private bool allowExhaustedWallJump = true;
+
+    [Header("Low Stamina Warning VFX")]
+    [Tooltip("Percentage threshold (0-1) where low stamina blinking starts.")]
+    [SerializeField][Range(0.1f, 0.5f)] private float lowStaminaThresholdRatio = 0.3f;
+
+    [Tooltip("Color to tint/flash the player sprite when low on stamina.")]
+    [SerializeField] private Color lowStaminaFlashColor = new Color(1f, 0.25f, 0.2f, 1f);
+
+    [Tooltip("How fast the player sprite blinks when stamina is low.")]
+    [SerializeField] private float lowStaminaBlinkSpeed = 16f;
+
+    [Header("Ledge Climb / Hop")]
+    [Tooltip("Enable automated climbing onto ledges when climbing past the wall top.")]
+    [SerializeField] private bool enableLedgeClimb = true;
+
+    [Tooltip("Height offset above the player to check for free space over the ledge.")]
+    [SerializeField] private float ledgeCheckHeight = 0.6f;
+
+    [Tooltip("Distance forward to check over the top of the ledge.")]
+    [SerializeField] private float ledgeCheckForwardDistance = 0.5f;
+
+    [Tooltip("Upward force boost when popping onto a ledge.")]
+    [SerializeField] private float ledgeClimbUpForce = 8f;
+
+    [Tooltip("Forward force boost toward the ledge surface.")]
+    [SerializeField] private float ledgeClimbForwardForce = 5f;
+
+    [Tooltip("Duration of movement control lock during ledge hop.")]
+    [SerializeField] private float ledgeClimbLockDuration = 0.12f;
+
+    [Header("Dash (8-Way)")]
+    [Tooltip("Dash speed.")]
+    [SerializeField] private float dashSpeed = 24f;
 
     [Tooltip("How long the dash lasts.")]
     [SerializeField] private float dashDuration = 0.15f;
 
-    [Tooltip("Optional cooldown between dashes. Leave at zero for no cooldown.")]
+    [Tooltip("Optional cooldown between dashes.")]
     [SerializeField] private float dashCooldown = 0.2f;
 
-    [Tooltip("Optional brief freeze frame when dashing. Leave disabled for a more classic feel.")]
+    [Tooltip("Multiplier applied to Y speed when an upward dash ends.")]
+    [SerializeField][Range(0.1f, 1f)] private float upwardDashEndMultiplier = 0.5f;
+
+    [Tooltip("Optional brief freeze frame when dashing.")]
     [SerializeField] private bool enableDashFreezeFrame = false;
 
     [Tooltip("Time scale used during the dash freeze frame.")]
@@ -96,72 +161,79 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private Transform groundCheck;
     [SerializeField] private Transform wallCheck;
     [SerializeField] private LayerMask collisionMask;
-    [SerializeField] private InputActionReference moveAction;
-    [SerializeField] private InputActionReference jumpAction;
-    [SerializeField] private InputActionReference dashAction;
 
     [Header("Death and Respawn")]
-    [Tooltip("The Layer representing hazards/damage (e.g., Spikes, Acid, Void).")]
+    [Tooltip("The Layer representing hazards/damage.")]
     [SerializeField] private LayerMask damageLayer;
     [Tooltip("Fixed transform point where the player will respawn.")]
     [SerializeField] private Transform respawnPoint;
     [Tooltip("How many seconds to wait in the death state before reviving.")]
     [SerializeField] private float respawnDelay = 1.2f;
 
-    [Header("Animation")]
-    [Tooltip("Animator driving the character clips (idle, run, jump, fall, death).")]
+    [Header("Animation State Names")]
+    [SerializeField] private string idleStateName = "idle";
+    [SerializeField] private string idleNoDashStateName = "idle_no_dash";
+    [SerializeField] private string runStateName = "run";
+    [SerializeField] private string runNoDashStateName = "run_no_dash";
+    [SerializeField] private string jumpStateName = "jump";
+    [SerializeField] private string jumpNoDashStateName = "jump_no_dash";
+    [SerializeField] private string fallStateName = "fall";
+    [SerializeField] private string fallNoDashStateName = "fall_no_dash";
+    [SerializeField] private string climbStateName = "climb";
+    [SerializeField] private string climbNoDashStateName = "climb_no_dash";
+    [SerializeField] private string deathStateName = "death";
+    [SerializeField] private string deathNoDashStateName = "death_no_dash";
+
+    [Header("Animation References")]
     [SerializeField] private Animator animator;
-
-    [Tooltip("SpriteRenderer used for facing-direction flip and dash afterimages.")]
     [SerializeField] private SpriteRenderer spriteRenderer;
-
-    [Tooltip("Enable if the source sprite faces right by default. Disable if it faces left by default.")]
     [SerializeField] private bool spriteFacesRightByDefault = true;
-
-    [Tooltip("Minimum horizontal speed to be considered 'running' for animation purposes.")]
     [SerializeField] private float runAnimSpeedThreshold = 0.1f;
 
-    [Header("Dash VFX (Celeste-style afterimages)")]
-    [Tooltip("Tint applied to spawned afterimage ghosts.")]
+    [Header("Dash VFX (Afterimages)")]
     [SerializeField] private Color dashAfterimageColor = new Color(1f, 1f, 1f, 0.55f);
-
-    [Tooltip("Seconds between each afterimage spawn while dashing.")]
     [SerializeField] private float dashAfterimageInterval = 0.02f;
-
-    [Tooltip("How long each afterimage takes to fade out.")]
     [SerializeField] private float dashAfterimageFadeDuration = 0.25f;
-
-    [Tooltip("Sorting order offset applied to afterimages, relative to the player sprite.")]
     [SerializeField] private int dashAfterimageSortingOrderOffset = -1;
-
-    [Tooltip("Enable brief flash tint applied to the sprite the instant a dash begins.")]
     [SerializeField] private bool enableDashFlash = true;
-
-    [Tooltip("Color used for the dash-start flash.")]
     [SerializeField] private Color dashFlashColor = Color.white;
-
-    [Tooltip("Duration of the dash-start flash.")]
     [SerializeField] private float dashFlashDuration = 0.06f;
 
+    [Header("Spring Integration")]
+    [SerializeField] private float horizontalSpringLockTime = 0.2f;
+    [SerializeField] private float springJumpBoost = 6f;
+    [SerializeField] private float springGraceTime = 0.15f;
+
     [Header("Debug")]
-    [Tooltip("Shows the collision checks in the Scene view.")]
     [SerializeField] private bool showDebugGizmos = true;
 
+    // References
     private Rigidbody2D rb;
+    private BoxCollider2D boxCollider;
+
+    // Hardcoded Input System Actions
+    private InputAction moveAction;
+    private InputAction jumpAction;
+    private InputAction dashAction;
+    private InputAction grabAction;
+
     private Vector2 moveInput;
     private bool jumpPressed;
     private bool jumpHeld;
     private bool jumpReleased;
     private bool dashPressed;
+    private bool climbHeld;
 
     private bool isGrounded;
     private bool isTouchingWall;
     private int wallDirection;
     private bool isWallSliding;
+    private bool isClimbing;
+    private bool isLedgeClimbing;
+    private float currentStamina;
 
-    // Dash Tracking States
     private bool isDashing;
-    private bool isDownwardDash;
+    private Vector2 dashDirection;
     private bool dashAvailable = true;
     private int facingDirection = 1;
 
@@ -169,76 +241,146 @@ public class PlayerController : MonoBehaviour
     private float dashBufferTimer;
     private float coyoteTimer;
     private float wallJumpLockTimer;
+    private float ledgeClimbTimer;
     private float dashCooldownTimer;
     private float dashTimer;
+    private float springLockTimer;
+    private float springGraceTimer;
 
     private Coroutine freezeFrameRoutine;
-
-    // Animation / VFX state
     private bool isDead;
     private float dashAfterimageTimer;
     private int currentAnimHash;
     private Coroutine dashFlashRoutine;
-
-    // Respawn Fallback
     private Vector2 startPosition;
 
-    private static readonly int AnimIdle = Animator.StringToHash("idle");
-    private static readonly int AnimRun = Animator.StringToHash("run");
-    private static readonly int AnimJump = Animator.StringToHash("jump");
-    private static readonly int AnimFall = Animator.StringToHash("fall");
-    private static readonly int AnimDeath = Animator.StringToHash("death");
+    // Animation Hashes
+    private int animIdle;
+    private int animIdleNoDash;
+    private int animRun;
+    private int animRunNoDash;
+    private int animJump;
+    private int animJumpNoDash;
+    private int animFall;
+    private int animFallNoDash;
+    private int animClimb;
+    private int animClimbNoDash;
+    private int animDeath;
+    private int animDeathNoDash;
+
+    public float CurrentStamina => currentStamina;
+    public float MaxStamina => maxStamina;
+    public bool IsExhausted => currentStamina <= 0f;
+    public bool IsClimbing => isClimbing;
 
     private void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
+        boxCollider = GetComponent<BoxCollider2D>();
+
         if (animator == null) animator = GetComponentInChildren<Animator>();
         if (spriteRenderer == null) spriteRenderer = GetComponentInChildren<SpriteRenderer>();
 
-        // Cache start position in case no respawn transform is assigned in the inspector
         startPosition = transform.position;
+        currentStamina = maxStamina;
+
+        CacheAnimHashes();
+        SetupHardcodedInputs();
+    }
+
+    private void SetupHardcodedInputs()
+    {
+        moveAction = new InputAction("Move", type: InputActionType.Value, expectedControlType: "Vector2");
+        moveAction.AddCompositeBinding("2DVector")
+            .With("Up", "<Keyboard>/upArrow")
+            .With("Down", "<Keyboard>/downArrow")
+            .With("Left", "<Keyboard>/leftArrow")
+            .With("Right", "<Keyboard>/rightArrow");
+        moveAction.AddCompositeBinding("2DVector")
+            .With("Up", "<Keyboard>/w")
+            .With("Down", "<Keyboard>/s")
+            .With("Left", "<Keyboard>/a")
+            .With("Right", "<Keyboard>/d");
+        moveAction.AddBinding("<Gamepad>/leftStick");
+        moveAction.AddBinding("<Gamepad>/dpad");
+
+        jumpAction = new InputAction("Jump", type: InputActionType.Button);
+        jumpAction.AddBinding("<Gamepad>/buttonSouth");
+        jumpAction.AddBinding("<Gamepad>/buttonNorth");
+        jumpAction.AddBinding("<Keyboard>/c");
+        jumpAction.AddBinding("<Keyboard>/space");
+
+        dashAction = new InputAction("Dash", type: InputActionType.Button);
+        dashAction.AddBinding("<Gamepad>/buttonWest");
+        dashAction.AddBinding("<Gamepad>/buttonEast");
+        dashAction.AddBinding("<Keyboard>/x");
+        dashAction.AddBinding("<Keyboard>/leftShift");
+
+        grabAction = new InputAction("Grab", type: InputActionType.Button);
+        grabAction.AddBinding("<Gamepad>/leftTrigger");
+        grabAction.AddBinding("<Gamepad>/rightTrigger");
+        grabAction.AddBinding("<Gamepad>/leftShoulder");
+        grabAction.AddBinding("<Gamepad>/rightShoulder");
+        grabAction.AddBinding("<Keyboard>/z");
+        grabAction.AddBinding("<Keyboard>/leftCtrl");
+    }
+
+    private void CacheAnimHashes()
+    {
+        animIdle = Animator.StringToHash(idleStateName);
+        animIdleNoDash = Animator.StringToHash(idleNoDashStateName);
+        animRun = Animator.StringToHash(runStateName);
+        animRunNoDash = Animator.StringToHash(runNoDashStateName);
+        animJump = Animator.StringToHash(jumpStateName);
+        animJumpNoDash = Animator.StringToHash(jumpNoDashStateName);
+        animFall = Animator.StringToHash(fallStateName);
+        animFallNoDash = Animator.StringToHash(fallNoDashStateName);
+        animClimb = Animator.StringToHash(climbStateName);
+        animClimbNoDash = Animator.StringToHash(climbNoDashStateName);
+        animDeath = Animator.StringToHash(deathStateName);
+        animDeathNoDash = Animator.StringToHash(deathNoDashStateName);
     }
 
     private void OnEnable()
     {
-        if (moveAction != null && moveAction.action != null) moveAction.action.Enable();
-        if (jumpAction != null && jumpAction.action != null) jumpAction.action.Enable();
-        if (dashAction != null && dashAction.action != null) dashAction.action.Enable();
+        moveAction?.Enable();
+        jumpAction?.Enable();
+        dashAction?.Enable();
+        grabAction?.Enable();
     }
 
     private void OnDisable()
     {
-        if (moveAction != null && moveAction.action != null) moveAction.action.Disable();
-        if (jumpAction != null && jumpAction.action != null) jumpAction.action.Disable();
-        if (dashAction != null && dashAction.action != null) dashAction.action.Disable();
+        moveAction?.Disable();
+        jumpAction?.Disable();
+        dashAction?.Disable();
+        grabAction?.Disable();
     }
 
     private void Update()
     {
         if (isDead) return;
 
-        moveInput = GetMoveInput();
-        jumpPressed = GetJumpPressed();
-        jumpHeld = GetJumpHeld();
-        jumpReleased = GetJumpReleased();
-        dashPressed = GetDashPressed();
+        moveInput = moveAction.ReadValue<Vector2>();
+        jumpPressed = jumpAction.WasPressedThisFrame();
+        jumpHeld = jumpAction.IsPressed();
+        jumpReleased = jumpAction.WasReleasedThisFrame();
+        dashPressed = dashAction.WasPressedThisFrame();
+        climbHeld = grabAction.IsPressed();
 
-        if (jumpPressed)
-        {
-            jumpBufferTimer = jumpBufferTime;
-        }
+        if (jumpPressed) jumpBufferTimer = jumpBufferTime;
+        if (dashPressed) dashBufferTimer = dashBufferTime;
 
-        if (dashPressed)
-        {
-            dashBufferTimer = dashBufferTime;
-        }
-
-        if (jumpReleased && !isGrounded && rb.linearVelocity.y > 0f)
+        if (jumpReleased && !isGrounded && rb.linearVelocity.y > 0f && !isClimbing)
         {
             rb.linearVelocity = new Vector2(rb.linearVelocity.x, rb.linearVelocity.y * jumpCutMultiplier);
         }
 
-        if (moveInput.x != 0f)
+        if (isClimbing || isWallSliding)
+        {
+            facingDirection = wallDirection;
+        }
+        else if (moveInput.x != 0f)
         {
             facingDirection = moveInput.x > 0f ? 1 : -1;
         }
@@ -247,50 +389,53 @@ public class PlayerController : MonoBehaviour
         dashBufferTimer = Mathf.Max(0f, dashBufferTimer - Time.deltaTime);
         coyoteTimer = Mathf.Max(0f, coyoteTimer - Time.deltaTime);
         wallJumpLockTimer = Mathf.Max(0f, wallJumpLockTimer - Time.deltaTime);
+        ledgeClimbTimer = Mathf.Max(0f, ledgeClimbTimer - Time.deltaTime);
         dashCooldownTimer = Mathf.Max(0f, dashCooldownTimer - Time.deltaTime);
+        springLockTimer = Mathf.Max(0f, springLockTimer - Time.deltaTime);
+        springGraceTimer = Mathf.Max(0f, springGraceTimer - Time.deltaTime);
+
+        if (ledgeClimbTimer <= 0f) isLedgeClimbing = false;
+
+        if (springGraceTimer > 0f && jumpPressed)
+        {
+            rb.linearVelocity = new Vector2(rb.linearVelocity.x, rb.linearVelocity.y + springJumpBoost);
+            springGraceTimer = 0f;
+            jumpBufferTimer = 0f;
+        }
 
         if (isGrounded)
         {
             coyoteTimer = coyoteTime;
-            if (dashCooldownTimer <= 0f)
-            {
-                dashAvailable = true;
-            }
+            currentStamina = maxStamina;
+            if (dashCooldownTimer <= 0f) dashAvailable = true;
         }
+
+        UpdateLowStaminaVisuals();
     }
 
     private void FixedUpdate()
     {
         if (isDead)
         {
-            // Fully freeze velocity during death to prevent sliding off platforms
             rb.linearVelocity = Vector2.zero;
             return;
         }
 
         EvaluateCollision();
 
-        // Downward Dash Ground-Cancel
-        if (isDashing && isDownwardDash && isGrounded)
+        if (isGrounded)
         {
-            isDashing = false;
-            isDownwardDash = false;
-            if (dashCooldown > 0f)
-            {
-                dashCooldownTimer = dashCooldown;
-            }
-            rb.gravityScale = 1f;
-            if (animator != null) animator.speed = 1f;
+            currentStamina = maxStamina;
+            coyoteTimer = coyoteTime;
+            if (dashCooldownTimer <= 0f) dashAvailable = true;
         }
 
-        // 1. Ignite Dash immediately
         if (dashBufferTimer > 0f && dashAvailable && !isDashing)
         {
             PerformDash();
             dashBufferTimer = 0f;
         }
 
-        // 2. Track ongoing dash physics execution loop
         if (isDashing)
         {
             dashAfterimageTimer -= Time.fixedDeltaTime;
@@ -304,39 +449,23 @@ public class PlayerController : MonoBehaviour
             if (dashTimer <= 0f)
             {
                 isDashing = false;
-                isDownwardDash = false;
-                if (dashCooldown > 0f)
-                {
-                    dashCooldownTimer = dashCooldown;
-                }
+                if (dashCooldown > 0f) dashCooldownTimer = dashCooldown;
                 rb.gravityScale = 1f;
+
+                if (dashDirection.y > 0f)
+                {
+                    rb.linearVelocity = new Vector2(rb.linearVelocity.x, rb.linearVelocity.y * upwardDashEndMultiplier);
+                }
+
                 if (animator != null) animator.speed = 1f;
             }
             else
             {
-                if (isDownwardDash)
-                {
-                    rb.linearVelocity = new Vector2(0f, rb.linearVelocity.y);
-                }
-                else
-                {
-                    rb.linearVelocity = new Vector2(rb.linearVelocity.x, 0f);
-                }
+                rb.linearVelocity = dashDirection * dashSpeed;
                 return;
             }
         }
 
-        // 3. Grounded / Aerial Replenish Rules
-        if (isGrounded)
-        {
-            coyoteTimer = coyoteTime;
-            if (dashCooldownTimer <= 0f)
-            {
-                dashAvailable = true;
-            }
-        }
-
-        // 4. Input Buffer Logic
         if (jumpBufferTimer > 0f)
         {
             if (isGrounded || coyoteTimer > 0f)
@@ -351,24 +480,146 @@ public class PlayerController : MonoBehaviour
             }
         }
 
-        // 5. Environmental Movement Adjustments
-        if (wallJumpLockTimer <= 0f)
+        bool canClimb = isTouchingWall && !isGrounded && climbHeld && currentStamina > 0f && wallJumpLockTimer <= 0f;
+        if (canClimb)
         {
-            ApplyHorizontalMovement();
+            isClimbing = true;
+            isWallSliding = false;
+            rb.gravityScale = 0f;
+
+            float yVel = 0f;
+            if (moveInput.y > 0.1f)
+            {
+                yVel = climbUpSpeed;
+                currentStamina -= climbUpStaminaDrain * Time.fixedDeltaTime;
+
+                if (enableLedgeClimb && CheckLedgeTopReached())
+                {
+                    PerformLedgeClimb();
+                    return;
+                }
+            }
+            else if (moveInput.y < -0.1f)
+            {
+                yVel = -climbDownSpeed;
+                currentStamina -= climbDownStaminaDrain * Time.fixedDeltaTime;
+            }
+            else
+            {
+                yVel = 0f;
+                currentStamina -= climbStaminaDrain * Time.fixedDeltaTime;
+            }
+
+            currentStamina = Mathf.Max(0f, currentStamina);
+            rb.linearVelocity = new Vector2(wallDirection * 0.1f, yVel);
         }
         else
         {
-            rb.linearVelocity = new Vector2(Mathf.Clamp(rb.linearVelocity.x, -maxSpeed, maxSpeed), rb.linearVelocity.y);
+            if (isClimbing)
+            {
+                isClimbing = false;
+                rb.gravityScale = 1f;
+            }
         }
 
-        if (isWallSliding)
+        if (!isClimbing && !isLedgeClimbing)
         {
-            rb.linearVelocity = new Vector2(rb.linearVelocity.x, Mathf.Max(rb.linearVelocity.y, -wallSlideSpeed));
+            if (springLockTimer > 0f) { }
+            else if (wallJumpLockTimer <= 0f)
+            {
+                ApplyHorizontalMovement();
+            }
+            else
+            {
+                rb.linearVelocity = new Vector2(Mathf.Clamp(rb.linearVelocity.x, -maxSpeed, maxSpeed), rb.linearVelocity.y);
+            }
+
+            if (isWallSliding)
+            {
+                rb.linearVelocity = new Vector2(rb.linearVelocity.x, Mathf.Max(rb.linearVelocity.y, -wallSlideSpeed));
+            }
+            else
+            {
+                ApplyGravity();
+            }
+
+            if (enableCornerCorrection)
+            {
+                PerformUpwardCornerCorrection();
+            }
+        }
+    }
+
+    private void PerformUpwardCornerCorrection()
+    {
+        if (rb.linearVelocity.y <= 0f || boxCollider == null) return;
+
+        Bounds bounds = boxCollider.bounds;
+        Vector2 leftCorner = new Vector2(bounds.min.x + 0.02f, bounds.max.y);
+        Vector2 rightCorner = new Vector2(bounds.max.x - 0.02f, bounds.max.y);
+
+        bool leftHit = Physics2D.Raycast(leftCorner, Vector2.up, cornerCheckDistance, collisionMask);
+        bool rightHit = Physics2D.Raycast(rightCorner, Vector2.up, cornerCheckDistance, collisionMask);
+
+        if (rightHit && !leftHit)
+        {
+            transform.position += Vector3.left * cornerNudgeAmount;
+        }
+        else if (leftHit && !rightHit)
+        {
+            transform.position += Vector3.right * cornerNudgeAmount;
+        }
+    }
+
+    private void UpdateLowStaminaVisuals()
+    {
+        if (spriteRenderer == null || dashFlashRoutine != null) return;
+
+        float ratio = currentStamina / maxStamina;
+
+        if (ratio <= lowStaminaThresholdRatio && currentStamina > 0f && (isClimbing || !isGrounded))
+        {
+            float flash = Mathf.PingPong(Time.time * lowStaminaBlinkSpeed, 1f);
+            spriteRenderer.color = Color.Lerp(Color.white, lowStaminaFlashColor, flash);
+        }
+        else if (ratio <= 0f)
+        {
+            spriteRenderer.color = lowStaminaFlashColor;
         }
         else
         {
-            ApplyGravity();
+            spriteRenderer.color = Color.white;
         }
+    }
+
+    private bool CheckLedgeTopReached()
+    {
+        if (wallCheck == null) return false;
+
+        Vector2 origin = (Vector2)wallCheck.position + Vector2.up * ledgeCheckHeight;
+        Vector2 direction = Vector2.right * wallDirection;
+
+        RaycastHit2D upperHit = Physics2D.Raycast(origin, direction, ledgeCheckForwardDistance, collisionMask);
+
+        if (upperHit.collider == null)
+        {
+            Vector2 downOrigin = origin + (direction * ledgeCheckForwardDistance);
+            RaycastHit2D downHit = Physics2D.Raycast(downOrigin, Vector2.down, ledgeCheckHeight, collisionMask);
+
+            return downHit.collider != null;
+        }
+
+        return false;
+    }
+
+    private void PerformLedgeClimb()
+    {
+        isClimbing = false;
+        isLedgeClimbing = true;
+        ledgeClimbTimer = ledgeClimbLockDuration;
+
+        rb.gravityScale = 1f;
+        rb.linearVelocity = new Vector2(wallDirection * ledgeClimbForwardForce, ledgeClimbUpForce);
     }
 
     private void LateUpdate()
@@ -406,7 +657,7 @@ public class PlayerController : MonoBehaviour
             }
         }
 
-        if (isTouchingWall && !isGrounded && rb.linearVelocity.y < 0f)
+        if (isTouchingWall && !isGrounded && rb.linearVelocity.y < 0f && !isClimbing)
         {
             isWallSliding = true;
         }
@@ -466,35 +717,44 @@ public class PlayerController : MonoBehaviour
 
     private void PerformWallJump()
     {
+        if (currentStamina <= 0f)
+        {
+            if (!allowExhaustedWallJump) return;
+
+            Vector2 weakJumpVelocity = new Vector2(wallJumpHorizontalForce * -wallDirection * 0.75f, 0f);
+            rb.linearVelocity = weakJumpVelocity;
+            wallJumpLockTimer = wallJumpLockTime;
+            isGrounded = false;
+            isWallSliding = false;
+            isClimbing = false;
+            return;
+        }
+
         Vector2 wallJumpVelocity = new Vector2(wallJumpHorizontalForce * -wallDirection, wallJumpVerticalForce);
         rb.linearVelocity = wallJumpVelocity;
 
+        currentStamina = Mathf.Max(0f, currentStamina - wallJumpStaminaCost);
         wallJumpLockTimer = wallJumpLockTime;
-        dashAvailable = true;
+        // Wall jump no longer restores dash (Celeste rule)
         isGrounded = false;
         isWallSliding = false;
+        isClimbing = false;
     }
 
     private void PerformDash()
     {
         if (!dashAvailable) return;
 
-        isDownwardDash = (moveInput.y < -0.5f && !isGrounded);
-
-        if (isDownwardDash)
-        {
-            rb.linearVelocity = Vector2.down * downwardDashSpeed;
-        }
-        else
-        {
-            Vector2 dashDirection = GetDashDirection();
-            rb.linearVelocity = dashDirection * dashSpeed;
-        }
+        dashDirection = Get8WayDashDirection();
+        rb.linearVelocity = dashDirection * dashSpeed;
 
         dashTimer = dashDuration;
         isDashing = true;
         dashAvailable = false;
+        isClimbing = false;
         rb.gravityScale = 0f;
+
+        UpdateAnimation();
 
         if (animator != null) animator.speed = 0f;
 
@@ -510,17 +770,23 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    private Vector2 GetDashDirection()
+    private Vector2 Get8WayDashDirection()
     {
-        float horizontalInput = moveInput.x;
-        if (Mathf.Abs(horizontalInput) > 0.01f)
+        int x = 0;
+        int y = 0;
+
+        if (Mathf.Abs(moveInput.x) > 0.2f) x = moveInput.x > 0f ? 1 : -1;
+        if (Mathf.Abs(moveInput.y) > 0.2f) y = moveInput.y > 0f ? 1 : -1;
+
+        if (x == 0 && y == 0)
         {
-            return horizontalInput > 0f ? Vector2.right : Vector2.left;
+            return new Vector2(facingDirection, 0f);
         }
-        return facingDirection == 1 ? Vector2.right : Vector2.left;
+
+        return new Vector2(x, y).normalized;
     }
 
-    private System.Collections.IEnumerator ApplyDashFreezeFrame()
+    private IEnumerator ApplyDashFreezeFrame()
     {
         float originalTimeScale = Time.timeScale;
         Time.timeScale = dashFreezeFrameTimeScale;
@@ -529,9 +795,40 @@ public class PlayerController : MonoBehaviour
         freezeFrameRoutine = null;
     }
 
-    // ---------------------------------------------------------------------
-    // Animation & facing
-    // ---------------------------------------------------------------------
+    public void SpringLaunch(Vector2 launchVelocity, bool isHorizontal)
+    {
+        if (isDashing)
+        {
+            isDashing = false;
+            rb.gravityScale = 1f;
+            if (animator != null) animator.speed = 1f;
+        }
+
+        dashAvailable = true;
+        dashCooldownTimer = 0f;
+        currentStamina = maxStamina;
+
+        Vector2 finalVelocity = launchVelocity;
+
+        if ((jumpHeld || jumpBufferTimer > 0f) && launchVelocity.y > 0f)
+        {
+            finalVelocity.y += springJumpBoost;
+            jumpBufferTimer = 0f;
+        }
+        else if (launchVelocity.y > 0f)
+        {
+            springGraceTimer = springGraceTime;
+        }
+
+        rb.linearVelocity = finalVelocity;
+
+        if (finalVelocity.x != 0f)
+        {
+            facingDirection = finalVelocity.x > 0f ? 1 : -1;
+        }
+
+        springLockTimer = isHorizontal ? horizontalSpringLockTime : 0f;
+    }
 
     private void UpdateAnimation()
     {
@@ -539,26 +836,34 @@ public class PlayerController : MonoBehaviour
 
         if (isDead)
         {
-            PlayAnimation(AnimDeath);
+            PlayAnimation(dashAvailable ? animDeath : animDeathNoDash);
             return;
         }
 
-        if (isDashing)
+        // Plays climb state whenever player touches a wall airborne, regardless of grab key input
+        if (!isGrounded && isTouchingWall)
         {
-            return;
+            PlayAnimation(dashAvailable ? animClimb : animClimbNoDash);
         }
-
-        if (!isGrounded)
+        else if (!isGrounded)
         {
-            PlayAnimation(rb.linearVelocity.y > 0.05f ? AnimJump : AnimFall);
+            bool isRising = rb.linearVelocity.y > 0.05f;
+            if (isRising)
+            {
+                PlayAnimation(dashAvailable ? animJump : animJumpNoDash);
+            }
+            else
+            {
+                PlayAnimation(dashAvailable ? animFall : animFallNoDash);
+            }
         }
         else if (Mathf.Abs(rb.linearVelocity.x) > runAnimSpeedThreshold)
         {
-            PlayAnimation(AnimRun);
+            PlayAnimation(dashAvailable ? animRun : animRunNoDash);
         }
         else
         {
-            PlayAnimation(AnimIdle);
+            PlayAnimation(dashAvailable ? animIdle : animIdleNoDash);
         }
     }
 
@@ -572,13 +877,16 @@ public class PlayerController : MonoBehaviour
     private void PlayAnimation(int animationHash)
     {
         if (animator == null || currentAnimHash == animationHash) return;
+        if (!animator.HasState(0, animationHash)) return;
+
         currentAnimHash = animationHash;
         animator.CrossFadeInFixedTime(animationHash, 0.05f, 0);
-    }
 
-    // ---------------------------------------------------------------------
-    // Dash VFX
-    // ---------------------------------------------------------------------
+        if (animator.speed == 0f)
+        {
+            animator.Update(0f);
+        }
+    }
 
     private void SpawnDashAfterimage()
     {
@@ -634,128 +942,55 @@ public class PlayerController : MonoBehaviour
         dashFlashRoutine = null;
     }
 
-    // ---------------------------------------------------------------------
-    // Death / respawn
-    // ---------------------------------------------------------------------
-
-    /// <summary>Call from your health/hazard system when the player should die.</summary>
     public void Die()
     {
         if (isDead) return;
 
         isDead = true;
         isDashing = false;
-        isDownwardDash = false;
         isWallSliding = false;
+        isClimbing = false;
 
-        rb.gravityScale = 0f; // Prevent gravity from dropping the corpse off-screen during death animation
+        rb.gravityScale = 0f;
         rb.linearVelocity = Vector2.zero;
-        rb.simulated = false; // Disable physics detection & triggers during death
+        rb.simulated = false;
 
         if (animator != null) animator.speed = 1f;
     }
 
-    /// <summary>Call after repositioning the player to bring input/physics back online.</summary>
     public void Respawn()
     {
         isDead = false;
         dashAvailable = true;
         dashCooldownTimer = 0f;
+        currentStamina = maxStamina;
         currentAnimHash = 0;
 
         rb.gravityScale = 1f;
-        rb.simulated = true; // Turn physics/triggers back on
+        rb.simulated = true;
         rb.linearVelocity = Vector2.zero;
     }
 
-    // Coroutine sequence to transition death to respawn smoothly
     private IEnumerator RespawnSequence()
     {
         Die();
-
         yield return new WaitForSeconds(respawnDelay);
 
-        // Reposition the player
-        if (respawnPoint != null)
-        {
-            transform.position = respawnPoint.position;
-        }
-        else
-        {
-            transform.position = startPosition;
-        }
-
+        transform.position = respawnPoint != null ? respawnPoint.position : startPosition;
         Respawn();
     }
 
-    // ---------------------------------------------------------------------
-    // Hazard Collision & Trigger Detections
-    // ---------------------------------------------------------------------
-
-    private void OnTriggerEnter2D(Collider2D other)
-    {
-        EvaluateHazardContact(other.gameObject);
-    }
-
-    private void OnCollisionEnter2D(Collision2D other)
-    {
-        EvaluateHazardContact(other.gameObject);
-    }
+    private void OnTriggerEnter2D(Collider2D other) => EvaluateHazardContact(other.gameObject);
+    private void OnCollisionEnter2D(Collision2D other) => EvaluateHazardContact(other.gameObject);
 
     private void EvaluateHazardContact(GameObject contactedObject)
     {
         if (isDead) return;
 
-        // Check if the layer of the contacted object exists within the designated damage LayerMask
         if (((1 << contactedObject.layer) & damageLayer) != 0)
         {
             StartCoroutine(RespawnSequence());
         }
-    }
-
-    // ---------------------------------------------------------------------
-    // Input Handling
-    // ---------------------------------------------------------------------
-
-    private Vector2 GetMoveInput()
-    {
-        if (moveAction != null && moveAction.action != null) return moveAction.action.ReadValue<Vector2>();
-
-        Vector2 axis = Vector2.zero;
-        if (Keyboard.current != null)
-        {
-            if (Keyboard.current.aKey.isPressed || Keyboard.current.leftArrowKey.isPressed) axis.x -= 1f;
-            if (Keyboard.current.dKey.isPressed || Keyboard.current.rightArrowKey.isPressed) axis.x += 1f;
-            if (Keyboard.current.wKey.isPressed || Keyboard.current.upArrowKey.isPressed) axis.y += 1f;
-            if (Keyboard.current.sKey.isPressed || Keyboard.current.downArrowKey.isPressed) axis.y -= 1f;
-        }
-        if (Gamepad.current != null) axis += Gamepad.current.leftStick.ReadValue();
-
-        return Vector2.ClampMagnitude(axis, 1f);
-    }
-
-    private bool GetJumpPressed()
-    {
-        if (jumpAction != null && jumpAction.action != null) return jumpAction.action.WasPressedThisFrame();
-        return Keyboard.current != null && Keyboard.current.spaceKey.wasPressedThisFrame;
-    }
-
-    private bool GetJumpHeld()
-    {
-        if (jumpAction != null && jumpAction.action != null) return jumpAction.action.IsPressed();
-        return Keyboard.current != null && Keyboard.current.spaceKey.isPressed;
-    }
-
-    private bool GetJumpReleased()
-    {
-        if (jumpAction != null && jumpAction.action != null) return jumpAction.action.WasReleasedThisFrame();
-        return Keyboard.current != null && Keyboard.current.spaceKey.wasReleasedThisFrame;
-    }
-
-    private bool GetDashPressed()
-    {
-        if (dashAction != null && dashAction.action != null) return dashAction.action.WasPressedThisFrame();
-        return Keyboard.current != null && Keyboard.current.leftShiftKey.wasPressedThisFrame;
     }
 
     private void OnDrawGizmosSelected()
@@ -770,6 +1005,21 @@ public class PlayerController : MonoBehaviour
         {
             Gizmos.DrawWireSphere(wallCheck.position + Vector3.left * wallCheckRadius, wallCheckRadius);
             Gizmos.DrawWireSphere(wallCheck.position + Vector3.right * wallCheckRadius, wallCheckRadius);
+
+            Vector2 origin = (Vector2)wallCheck.position + Vector2.up * ledgeCheckHeight;
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawRay(origin, Vector3.right * wallDirection * ledgeCheckForwardDistance);
+        }
+
+        if (boxCollider != null && enableCornerCorrection)
+        {
+            Gizmos.color = Color.yellow;
+            Bounds bounds = boxCollider.bounds;
+            Vector2 leftCorner = new Vector2(bounds.min.x + 0.02f, bounds.max.y);
+            Vector2 rightCorner = new Vector2(bounds.max.x - 0.02f, bounds.max.y);
+
+            Gizmos.DrawRay(leftCorner, Vector2.up * cornerCheckDistance);
+            Gizmos.DrawRay(rightCorner, Vector2.up * cornerCheckDistance);
         }
     }
 }
